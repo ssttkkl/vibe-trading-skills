@@ -1,6 +1,6 @@
 ---
 name: polymarket-vibe-arb
-description: Polymarket 尾盘扫描 → vibe-trading 分析。扫子盘级数据 → AI 原则过滤 → 原始候选数据发到 vibe-trading API 全权调研（不预填数据不假设工具）→ 输出 P0/P1 分级报告
+description: Polymarket 尾盘扫描 → vibe-trading 分析。扫子盘级数据 → AI 原则过滤 → 原始候选数据发到 vibe-trading API 全权调研（不预填数据不假设工具）→ 输出完整分析报告
 version: 1.2.0
 tags: [polymarket, vibe-trading, 套利, 送钱盘]
 ---
