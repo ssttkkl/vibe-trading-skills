@@ -1,7 +1,7 @@
 ---
 name: polymarket-vibe-arb
 description: Polymarket 尾盘扫描 → vibe-trading 分析。扫子盘级数据 → AI 原则过滤 → 原始候选数据发到 vibe-trading API 全权调研（不预填数据不假设工具）→ 输出完整分析报告
-version: 1.2.0
+version: 1.2.1
 tags: [polymarket, vibe-trading, 套利, 送钱盘]
 ---
 
@@ -204,21 +204,15 @@ print('年份:', sorted(set(re.findall(r'20\\d{2}', desc))))
 3. **"XX 人在 6/30 前进入伊朗"系列** — 特定人选不可能（Trump/Pete Hegseth/Netanyahu 进伊朗=概率 0）
 4. **地缘政治量化指标盘** — IMF Portwatch 等客观数据源，规则清晰无争议
 
+## 参考模板
+
+- 可直接复制的 Polymarket 深度调研 prompt：`references/polymarket-deep-research-prompt.md`
+- 该模板已把流程、方法论和输出格式合并在一起
+- 若需要回看分析原则，这里只保留一句：**规则客观、价格偏离、流动性可执行、尾部风险可控**
+
 ## 参考文件
 
 - `references/gamma-api-query-patterns.md` — Gamma API 查询模式和坑
-- `references/strait-of-hormuz-traffic-analysis.md` — 霍尔木兹通行量分析（跨到期日推理）
-- `references/warships-hormuz-assessment.md` — 军舰通过霍尔木兹概率
-- `references/gold-settlement-arb-pattern.md` — 黄金六月结算价套利案例
-- `references/middle-east-market-clusters.md` — 中东市场族系与联动
-- `references/strait-of-hormuz-june-analysis.md` — 霍尔木兹 6/30 分析
-- `references/volatility-price-range-analysis.md` — 波动率感知分析（价格盘）
 - `references/portwatch-api.md` — Portwatch API 数据源
-- `references/options-chain-probability.md` — 期权链概率验证方法论
-- `references/2026-06-27-analysis-case-study.md` — 实战案例
+- `references/polymarket-deep-research-prompt.md` — 可直接复制给 vibe-trading 的 Polymarket 深度调研 prompt 模板
 
-## 前置条件
-
-- `vibe-trading serve`（localhost:8000）
-- 本地 Jina Reader Docker（端口 3000，防 451 阻断）
-- `~/.hermes/scripts/` 下有扫描脚本 + `poll_session.py`
