@@ -1,52 +1,56 @@
 ---
 name: polymarket-vibe-arb
-description: Polymarket 尾盘扫描 → vibe-trading 分析。扫子盘级数据 → AI 原则过滤 → 原始候选数据发到 vibe-trading API 全权调研（不预填数据不假设工具）→ 输出完整分析报告
-version: 1.2.1
+description: Polymarket 尾盘扫描与批量并列调研：筛盘、传原始候选、让 vibe-trading 做全权深度分析并输出结论。
+version: 1.2.2
 tags: [polymarket, vibe-trading, 套利, 送钱盘]
 ---
 
 # Polymarket Vibe-Arb
 
-联动扫描器 + vibe-trading 做深度分析。包含方法论（找送钱盘的原则、规则分析技巧、波动率感知分析）和自动化流水线（扫描→过滤→vibe-trading 全权调研）。
+用扫描器找候选盘，再把**原始候选数据**交给 vibe-trading 做并列深度调研。核心目标：找到**尾盘套利**里最值得下注的盘——优先看事件确定概率、可执行性、尾部风险和剩余套利空间，而不是讨论市场定价是否“合理”。
 
 ## 核心原则
 
-**只喂原始数据，让 vibe-trading 全权调研。** 不加行情、不假设工具有什么、不预先上网查新闻。
+- **只喂原始数据，让 vibe-trading 自己调研。** 不预填结论，不假设工具，不代查新闻。
+- **重点是尾盘套利最大化。** 市场定价是否“合理”不是终点，关键是事件确定概率下的剩余套利空间。
+- **批量扫描必须并列看待候选盘。** 不写成“主盘 + 补充盘”。
+- **主筛区看对称区间。** 优先看 `Yes/No 85–99.5¢` 的盘；`Yes 100¢` 这类饱和盘默认降权，只在“是否已经没空间”时作为排除/确认项。
+- **只保留可复用内容。** 案例、误判长文、一次性分析不要长期留在 `references/`。
 
-实测（2026-06-27）：直接发候选表，vibe-trading 自己拉了 yfinance 实时价、OVX/BVIV 期权链隐含波动率、搜到 US 6/26 打击伊朗新闻，报告质量优于预调研。
+## 工作流
 
-## 自动化流水线
-
+```text
+单盘：Gamma/页面抓规则与盘口 → 填单盘模板 → 发 vibe-trading → 轮询 → 报告
+批量：扫描子盘数据 → AI 原则过滤 → 原始候选数据 → vibe-trading session → 轮询 → 报告 → QQ
 ```
-① run_arb_scan.sh → 扫描数据
-② AI 原则过滤（排除体育/名人/meme/垃圾流动性）
-③ 原始候选数据 → vibe-trading API session
-④ vibe-trading 全权调研
-⑤ 轮询 → 报告 → QQ
-```
 
-### Step 1：扫数据
+- 单盘分析直接用 `references/polymarket-deep-research-prompt.md` 的单盘版。
+- 批量扫描默认用并列版，不要写成主盘 + 附属盘。
+- 如果用户只要求“先扫一轮 / 先看候选”，先返回候选清单，不要主动发 vibe-trading。
+
+- 多到期日/同规则事件要**并列看待**，不要写成“主盘 + 补充盘”。
+- 先找事件页/slug，再拉 Gamma；不要依赖标题模糊搜索去猜事件，容易命中无关盘。
+
+### 扫描
 
 ```bash
-cd ~/.hermes/scripts
-python3 polymarket_arb_scanner.py \
-  --days 7 --price-min 0.80 --price-max 0.99 \
-  --min-vol 10000 --event-pages 5 --top 100 --max-spread 15
+cd ~/.hermes/skills/finance/polymarket-vibe-arb/scripts
+python3 polymarket_arb_scanner.py --days 7 --price-min 0.80 --price-max 0.99 --min-vol 10000 --event-pages 5 --top 100 --max-spread 15
 python3 volatility_dashboard.py
 ```
 
-### Step 2：AI 过滤原则（不要关键词硬编码）
+> 说明：脚本输出只是初筛。量、价差、流动性最后仍以 Gamma API / 实盘可交易性为准。
 
-| 排除 | 保留 |
-|------|------|
-| ✅ 体育结果（足球小组赛、比分、出线） | 价格/结算范围盘（黄金/WTI/BTC/ETH） |
-| ✅ 名人行为/meme（马斯克推文数） | 地缘政治盘（伊朗/以色列/霍尔木兹/俄罗斯） |
-| ✅ 主观裁决盘（定义模糊争议大） | 科技估值/产品盘（OpenAI/SpaceX/GPT） |
-| ✅ 价差>10% 且 量<$50K 的垃圾盘 | — |
+#### 指定到期窗口扫描（不要只用 `--days` 近似）
 
-只保留原始数据（盘口名、方向、价格、ROI、到期日、量）传给 vibe-trading。
+当用户给出明确日期窗口（例如“不包含 6/30，7/15 之前到期”）时，优先按 Gamma `/markets` 的 `end_date_min` / `end_date_max` 做窗口分页，而不是只扫事件页再按 `--days` 近似。建议口径：
 
-### Step 3：发到 vibe-trading
+- 用 `end_date_min=YYYY-MM-DDT00:00:00Z` 与 `end_date_max=YYYY-MM-DDT00:00:00Z`；结束日按 `< end_date_max` 理解。
+- 配合 `volume_num_min=10000`、`closed=false`、`active=true`、`limit=100`、`offset += 100` 分页；不要相信单页结果就是全量。
+- 仍按 Yes/No 85–99.5¢、最大 spread、成交量/流动性过滤。
+- 初筛时把体育、名人/meme、标题实际属于窗口外（如“by June 30”但因结算 endDate 落到 7/1）的盘降权/排除；但保留统计，方便用户核验漏筛。
+
+### 发到 vibe-trading
 
 ```bash
 SESSION_ID=$(curl -sf -X POST "http://127.0.0.1:8000/sessions" \
@@ -58,161 +62,61 @@ CONTENT=$(cat /tmp/vibe_prompt.md | python3 -c "import json,sys; print(json.dump
 curl -sf -X POST "http://127.0.0.1:8000/sessions/$SESSION_ID/messages" \
   -H "Content-Type: application/json" -d "$CONTENT"
 
-python3 ~/.hermes/skills/finance/vibe-trading/scripts/poll_session.py "$SESSION_ID" --timeout 900
+python3 poll_session.py "$SESSION_ID" --timeout 900
 ```
 
-### prompt 模板
+- 轮询前先确认 session 消息接口可读；必要时直接读 `GET /sessions/{session_id}/messages` 兜底。
+- vibe-trading 的 message `content` 可能有 5000 字符上限。批量扫描不要把 20+ 个盘的完整规则原文全塞进去；先用脚本压缩：保留扫描口径、统计、slug、方向、Y/N、可执行买价、bid/ask/spread、volume/liquidity、endDate、规则前 100–200 字。候选按家族去重（如同一 Iran shipping 系列保留 2–3 个代表），目标控制在 4–5k 字内。
+- 若 `poll_session.py` 期间出现短暂 connection refused，不要立即重启/kill 服务；先用 `GET /sessions/{session_id}/messages` 查看是否已有 assistant 完整回复，再决定是否继续等。
 
-- **背景说明**：Polymarket 二元期权（买 No @ 90¢ = 到期判 No 赚 11.1%）
-- **候选盘按类型分组**，只附原始数据（名称、方向、价格、ROI、到期日、量）
-- **一次性完成全部调研，不留未完成项：**
+### 调研模板
 
-**1. 实时行情**
-- 拉所有价格相关资产（黄金、WTI、BTC、ETH、SPCX）的实时价
-- 拉期权隐含波动率（WTI→OVX, 黄金→GVZ, BTC→BVIV/DVOL）
-- 拉近期 K 线
+- 单盘版 / 批量并列版：`references/polymarket-deep-research-prompt.md`
+- Gamma 拉盘与字段映射说明：`references/polymarket-gamma-prompt-build.md`
+- ISW StoryMap / ArcGIS 图层核验：`references/isw-arcgis-resolution-check.md`
+- 批量扫描时默认使用**并列版**，不要写成单盘主市场。
 
-**2. 规则确认**
-- 找到每个盘口的 Resolution Rules 原文
-- 检查时间窗陷阱（规则写的年份和到期日是否一致）
-- 确认裁决来源（哪家机构/媒体判定结果）
-- 科技估值盘确认估值来源（NPM、公开市值还是融资轮）
-- 评估规则客观性：数据驱动 > 物理事实 > 主观判断
+## 送钱盘口径
 
-**3. 概率计算**
-- 价格盘：用期权 IV 算 z-score 和真实概率，对比市场定价
-- 地缘盘：按最新新闻和物理限制判断
-- 如果同一事件有多个到期日，对比价格差反推当前状态
-- 考虑尾部风险（地缘升级、黑天鹅）
-- 如果有历史过期子市场，去查它们为什么判 No——基本面原因现在是否仍然成立
+只有同时满足下面四条，才考虑叫“送钱盘”：
 
-**4. 基本面调研**
-- 价格盘：宏观新闻（Fed、CPI、地缘、供需）
-- 地缘盘：每个事件的最新具体新闻
-- 科技盘：融资/估值/产品发布动态
+- 规则客观可量化
+- 价格明显偏离真实概率
+- 流动性足够可执行
+- 尾部风险可控
 
-**5. 价差评估**
-- 对比你的概率和市场概率，差距是否足够大？
-- 标注方向不明确的盘（Yes 代表什么？）
-- 薄盘标注滑点风险
+简化判断：
 
-- **输出格式**：每个盘口的完整分析（实时价、波动率、期权概率、规则验证、基本面、价差评估）。**不分优先级、不给分配建议**——只呈现事实。
-
-### Step 4：输出
-
-vibe-trading 返回什么就发什么。超时说下次再试。
-
----
-
-## 方法论：找送钱盘的原则
-
-### 流动性门槛（铁律）
-
-| 等级 | 量 | 可操作性 |
-|:----|:--:|:--------|
-| ✅ **可推荐** | **>$1M** | CLOB 订单簿，零滑点，价格可执行 |
-| ⚠️ 仅小资金 | $1K-$1M | AMM盘，$400 以内可玩但需标注滑点 |
-| ❌ 不推荐 | <$1K | AMM 极薄盘，价格不靠谱 |
-
-**脚本显示的量不可信** — 扫尾盘脚本曾显示 $1.1M，API 核实仅 $446。**永远以 API 返回值（Gamma API）为准。**
-
-### 价格分档
-
-| No价格 | 类型 | ROI | 说明 |
-|:------:|:----|:---:|:----|
-| 98-100¢ | 🟢 确定性尾盘 | 0.1-2% | 几乎必中 |
-| 85-97¢ | 🟡 送钱盘 | 1-18% | 核心关注区 |
-| 80-84¢ | 🟠 价值盘 | 12-25% | 弹性大 |
-| <80¢ | 🔴 投机盘 | >25% | APY 虚高 |
-
-### 送钱盘 checklist
-
-- [ ] No 价格越高越确定
-- [ ] 到期越近越确定
-- [ ] 规则客观可量化（数据驱动 > 物理事实 > 主观判断）
-- [ ] 历史子市场全部判 No（同系列多个月验证）
-- [ ] 排除体育/名人/meme
-- [ ] 尾部风险可控
-
-### 规则分析的坑
-
-**Gamma API 搜索不可靠：** `?title=` 和 `?tag=` 参数经常不工作，必须用 offset 翻页 + 本地 grep 过滤。
-
-**规则时间窗陷阱（2026-06-27 发现）：** 某盘口标题写"XX by June 30?"，但事件规则里限定的是 2025 年的窗口，市场仍在交易。排查方法：
-```bash
-curl -s 'https://gamma-api.polymarket.com/events/{event_id}' | python3 -c "
-import json,sys,re; e=json.load(sys.stdin)
-desc = e.get('description','')
-print('年份:', sorted(set(re.findall(r'20\\d{2}', desc))))
-"
-```
-
-**规则客观性分级：**
-
-| 类型 | 风险 | 说明 |
-|:-----|:---:|:-----|
-| 数据驱动（IMF/Portwatch） | 🟢 低 | 完全客观 |
-| 物理事实（入境/辞职） | 🟡 中 | 可验证但有解释空间 |
-| 主观判断（侮辱/成功/最好） | 🔴 高 | 规避 |
-
-### 跨到期日价格对比
-
-同一事件多个到期日，价格差 = 时间价值。对比可反推当前状态：
-
-```
-霍尔木兹 6/30 Yes @ 4.75¢ vs 7/31 Yes @ 49.5¢
-→ 4.75¢ 说明当前通行量远低于 60 阈值
-→ 2.5 天翻倍到 60+ 不可能 → 6/30 No 安全
-```
-
-### No 价格 ≠ 真实概率
-
-市场定价和真实概率的差价就是套利空间：
-
-```
-韩国军舰 No @ 88¢ → 隐含 Yes 概率 12%
-真实概率：2.5 天派军舰 ≈ 0.1%（真实 No ≈ 99.9¢）
-                                   ↓
-                           差价 11.9¢ = 套利空间
-```
-
-发现价差的方法：
-1. **基本面分析** — 基于物理限制（2.5 天派军舰不可能）
-2. **历史模式** — 连续多月全 No
-3. **规则逻辑** — 阈值在 2-3 天无法达到
-
-### 波动率感知分析（价格盘专用）
-
-**铁律：当前价在范围内 ≠ 到期也在范围内。**
-
-1. 获取波动率数据（`volatility_dashboard.py`）
-2. 评估安全边际：当前价在范围的什么位置？
-3. 检查到期前宏观事件（Fed、CPI、非农）
-4. 用期权链隐含波动率计算概率
-
-### 薄盘与小资金
-
-资金量<$1K 时薄盘反而是优势——可能吃到价格偏离的利润。注意：
-- CLOB 盘用 bestBid/Ask 看深度
-- AMM 盘买入超总量 10% 时滑点吃掉 30-50% 利润
-- 薄盘价格几分钟变动 3-5¢
-
-### 典型送钱盘特征（基本面驱动，非模式重复）
-
-1. **"XX 事件在短期内不可能发生"** — 物理限制决定（某人几天内不可能回国、政府几天内不可能倒台）
-2. **"XX 公司全球最大"系列** — 几天内市值不可能被反超
-3. **"XX 人在 6/30 前进入伊朗"系列** — 特定人选不可能（Trump/Pete Hegseth/Netanyahu 进伊朗=概率 0）
-4. **地缘政治量化指标盘** — IMF Portwatch 等客观数据源，规则清晰无争议
-
-## 参考模板
-
-- 可直接复制的 Polymarket 深度调研 prompt：`references/polymarket-deep-research-prompt.md`
-- 该模板已把流程、方法论和输出格式合并在一起
-- 若需要回看分析原则，这里只保留一句：**规则客观、价格偏离、流动性可执行、尾部风险可控**
+- `Yes/No 85-99.5¢`：核心筛选区，优先看确定性和可执行性
+- `接近 100¢`：先判断是否已经到“几乎没空间”的尾盘，再决定是否排除
+- `80-84¢`：价值盘
+- `<80¢`：投机盘，APY 可能虚高
 
 ## 参考文件
 
-- `references/gamma-api-query-patterns.md` — Gamma API 查询模式和坑
-- `references/portwatch-api.md` — Portwatch API 数据源
-- `references/polymarket-deep-research-prompt.md` — 可直接复制给 vibe-trading 的 Polymarket 深度调研 prompt 模板
+- `references/polymarket-deep-research-prompt.md` — 直接复制给 vibe-trading 的 prompt 模板
+- `references/polymarket-gamma-prompt-build.md` — Gamma API 拉盘与字段拼装笔记；优先 slug，再落到具体 market 字段
+- `references/date-window-scan-and-vibe-prompt.md` — 明确到期窗口扫描、窗口边界坑、<5k 紧凑 vibe prompt 与 session 消息兜底
+- `references/session-reply-forwarding.md` — 当用户要求转发 session 最新/最后一条回复时，先读完整消息流再取最新 assistant 消息
 
+## 前置条件
+
+- `vibe-trading serve`（localhost:8000）
+- 本地 Jina Reader Docker（端口 3000，防 451 阻断）
+- `scripts/poll_session.py`
+
+## 常见坑
+
+1. **批量盘写成主盘 + 候选盘。** 这会把分析重心带歪；批量必须并列比较。
+2. **把脚本初筛当最终结论。** 初筛只负责过滤，最终判断交给 vibe-trading。
+3. **vibe-trading 的外部实时价可能错。** 尤其 BTC/ETH 这类阈值盘，最终答复前必须用结算源/主流 API（如 Binance ticker）独立核验当前价；若与 vibe 报告差异会显著改变缓冲、概率或排序，把修正价发回同一个 session 要求重算，再交付修正版。详见 `references/realtime-price-correction.md`。
+4. **留太多一次性案例。** `references/` 只放模板、工具型说明、可复用规则。
+5. **忘了规则客观性。** 主观裁决盘优先降权，不要硬凑 alpha。
+6. **直接按标题模糊匹配 Gamma 事件。** 同名/近名事件会误匹配，优先用 slug 或事件页上下文确认。
+
+## 验证
+
+- `references/` 里只留可复用模板/说明
+- 脚本全部在 `scripts/` 下
+- 批量扫描默认走并列版 prompt
+- 送钱盘定义与模板口径一致
